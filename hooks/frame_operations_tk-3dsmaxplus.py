@@ -21,27 +21,32 @@ class FrameOperation(HookBaseClass):
     current scene
     """
 
-    def get_frame_range(self, **kwargs):
+    def get_editorial_data(self, **kwargs):
         """
-        get_frame_range will return a tuple of (in_frame, out_frame)
+        get_editorial_data will return a tuple of (in_frame, out_frame, frame_range)
 
-        :returns: Returns the frame range in the form (in_frame, out_frame)
-        :rtype: tuple[int, int]
+        :returns: Returns the frame data in the form (in_frame, out_frame, frame_range)
+        :rtype: tuple[int, int, float]
         """
         ticks = MaxPlus.Core.EvalMAXScript("ticksperframe").GetInt()
         current_in = MaxPlus.Animation.GetAnimRange().Start() / ticks
         current_out = MaxPlus.Animation.GetAnimRange().End() / ticks
-        return (current_in, current_out)
+        current_fps = None  # TODO: get frame rate for 3dsmax
+        return (current_in, current_out, current_fps)
 
-    def set_frame_range(self, in_frame=None, out_frame=None, **kwargs):
+    def set_editorial_data(self, in_frame=None, out_frame=None, frame_rate=None, **kwargs):
         """
-        set_frame_range will set the frame range using `in_frame` and `out_frame`
+        set_editorial_data will set the frame range using `in_frame` and `out_frame`
+        and the frame rate using `frame_rate`
 
         :param int in_frame: in_frame for the current context
             (e.g. the current shot, current asset etc)
 
         :param int out_frame: out_frame for the current context
             (e.g. the current shot, current asset etc)
+
+        :param float frame_rate: frame_range for the current context
+            (e.g. the current shot, current asset, or current project)
 
         """
 

@@ -21,7 +21,7 @@ class FrameOperation(HookBaseClass):
     current scene
     """
 
-    def get_frame_range(self, **kwargs):
+    def get_editorial_data(self, **kwargs):
         """
         get_frame_range will return a tuple of (in_frame, out_frame)
 
@@ -30,11 +30,13 @@ class FrameOperation(HookBaseClass):
         """
         current_in = int(nuke.root()["first_frame"].value())
         current_out = int(nuke.root()["last_frame"].value())
-        return (current_in, current_out)
+        current_frame_rate = float(nuke.root()["fps"].value())
+        return (current_in, current_out, current_frame_rate)
 
-    def set_frame_range(self, in_frame=None, out_frame=None, **kwargs):
+    def set_editorial_data(self, in_frame=None, out_frame=None, frame_rate=None, **kwargs):
         """
-        set_frame_range will set the frame range using `in_frame` and `out_frame`
+        set_editorial_data will set the frame range using `in_frame` and `out_frame`
+        and the frame rate using `frame_rate`
 
         :param int in_frame: in_frame for the current context
             (e.g. the current shot, current asset etc)
@@ -42,15 +44,20 @@ class FrameOperation(HookBaseClass):
         :param int out_frame: out_frame for the current context
             (e.g. the current shot, current asset etc)
 
+        :param float frame_rate: frame_range for the current context
+            (e.g. the current shot, current asset, or current project)
         """
 
         # unlock
+        lock_range = self.parent.get_setting("lock_range")
         locked = nuke.root()["lock_range"].value()
         if locked:
             nuke.root()["lock_range"].setValue(False)
         # set values
         nuke.root()["first_frame"].setValue(in_frame)
         nuke.root()["last_frame"].setValue(out_frame)
+        if frame_rate:
+            nuke.root()["fps"].setValue(frame_rate)
         # and lock again
-        if locked:
+        if locked or lock_range:
             nuke.root()["lock_range"].setValue(True)

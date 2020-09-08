@@ -16,14 +16,14 @@ import os
 import traceback
 
 from tank.platform import Application
-from tank.platform.qt import QtCore, QtGui
+from tank.platform.qt import QtGui
 import tank
 
 
-class SetFrameRange(Application):
+class SetEditData(Application):
     """
     tk-multi-setframerange is a Shotgun toolkit application that allows you to set and get the
-        frame range from shotgun regardless of your specific DCC application.
+        frame range and frame rate from shotgun regardless of your specific DCC application.
 
     Standard applications come implemented for you but you are able to implement support for
         custom engines through the provided hooks.
@@ -36,7 +36,7 @@ class SetFrameRange(Application):
         # make sure that the context has an entity associated - otherwise it wont work!
         if self.context.entity is None:
             raise tank.TankError(
-                "Cannot load the Set Frame Range application! "
+                "Cannot load the Set Editorial Data application! "
                 "Your current context does not have an entity (e.g. "
                 "a current Shot, current Asset etc). This app requires "
                 "an entity as part of the context in order to work."
@@ -45,6 +45,9 @@ class SetFrameRange(Application):
         # We grab the menu name from the settings so that the user is able to register multiple instances
         # of this app with different frame range fields configured.
         self.engine.register_command(self.get_setting("menu_name"), self.run_app)
+
+        # Set a callback here to run on file open if the DCC supports it.
+        self.open_file_callback = self.set_open_file_callback(self.check_current_file)
 
     @property
     def context_change_allowed(self):
@@ -57,7 +60,10 @@ class SetFrameRange(Application):
         """
         App teardown
         """
-        self.logger.debug("Destroying sg_set_frame_range")
+        self.logger.debug("Destroying sg_set_editorial_data")
+
+        # Unset the open_file_callback.
+        self.unset_open_file_callback(self.check_current_file, self.open_file_callback)
 
     def run_app(self):
         """
@@ -71,8 +77,8 @@ class SetFrameRange(Application):
 
         """
         try:
-            (new_in, new_out) = self.get_frame_range_from_shotgun()
-            (current_in, current_out) = self.get_current_frame_range()
+            (new_in, new_out, new_rate) = self.get_editorial_data_from_shotgun()
+            (current_in, current_out, current_rate) = self.get_current_editorial_data()
 
             if new_in is None or new_out is None:
                 message = "Shotgun has not yet been populated with \n"
@@ -84,47 +90,57 @@ class SetFrameRange(Application):
             # because the frame range is often set in multiple places (e.g render range,
             # current range, anim range etc), we go ahead an update every time, even if the values
             # in Shotgun are the same as the values reported via get_current_frame_range()
-            self.set_frame_range(new_in, new_out)
+            self.set_editorial_data(new_in, new_out, new_rate)
             message = "Your scene has been updated with the \n"
-            message += "latest frame ranges from shotgun.\n\n"
+            message += "latest frame ranges and frame rates\n"
+            message += "from shotgun.\n\n"
             message += "Previous start frame: %s\n" % current_in
             message += "New start frame: %s\n\n" % new_in
             message += "Previous end frame: %s\n" % current_out
             message += "New end frame: %s\n\n" % new_out
+            if new_rate:
+                message += "Previous frame rate: %s\n" % current_rate
+                message += "New frame rate: %s\n\n" % new_rate
+            else:
+                message += "No setting was found to update\n"
+                message += "your frame rate so it was not changed.\n"
+                message += "Current frame rate: %s\n" % current_rate
 
-            QtGui.QMessageBox.information(None, "Frame range updated!", message)
+            QtGui.QMessageBox.information(None, "Frame data updated!", message)
 
         except tank.TankError:
-            message = "There was a problem updating your scene frame range.\n"
-            QtGui.QMessageBox.warning(None, "Frame range not updated!", message)
+            message = "There was a problem updating your scene frame data.\n"
+            QtGui.QMessageBox.warning(None, "Frame data not updated!", message)
             error_message = traceback.format_exc()
             self.logger.error(error_message)
 
     ###############################################################################################
     # implementation
 
-    def get_frame_range_from_shotgun(self):
+    def get_editorial_data_from_shotgun(self):
         """
-        get_frame-range_from_shotgun will query shotgun for the
-            'sg_in_frame_field' and 'sg_out_frame_field' setting values and return a
-            tuple of (in, out).
+        get_editorial_data_from_shotgun will query shotgun for the
+            'sg_in_frame_field', 'sg_out_frame_field', 'sg_frame_rate_field'
+            setting values and return a tuple of (in, out, frame_rate).
 
         If the fields specified in the settings do not exist in your Shotgun site, this will raise
             a tank.TankError letting you know which field is missing.
 
-        :returns: Tuple of (in, out)
-        :rtype: tuple[int,int]
+        :returns: Tuple of (in, out, frame_rate)
+        :rtype: tuple[int,int,float]
         :raises: tank.TankError
         """
         # we know that this exists now (checked in init)
         entity = self.context.entity
+        project = self.context.project
 
         sg_entity_type = self.context.entity["type"]
         sg_filters = [["id", "is", entity["id"]]]
 
         sg_in_field = self.get_setting("sg_in_frame_field")
         sg_out_field = self.get_setting("sg_out_frame_field")
-        fields = [sg_in_field, sg_out_field]
+        sg_frame_rate_field = self.get_setting("sg_frame_rate_field")
+        fields = [sg_in_field, sg_out_field, sg_frame_rate_field]
 
         data = self.shotgun.find_one(sg_entity_type, filters=sg_filters, fields=fields)
 
@@ -143,70 +159,166 @@ class SetFrameRange(Application):
                 "field %s.%s!" % (sg_entity_type, sg_entity_type, sg_out_field)
             )
 
-        return (data[sg_in_field], data[sg_out_field])
+        if not data.get(sg_frame_rate_field):
+            proj_data = self.shotgun.find_one("Project", filters=[["id", "is", project["id"]]], fields=fields)
+            if sg_frame_rate_field not in proj_data:
+                data[sg_frame_rate_field] = None
+            else:
+                data[sg_frame_rate_field] = proj_data[sg_frame_rate_field]
 
-    def get_current_frame_range(self):
+        return (data[sg_in_field], data[sg_out_field], data[sg_frame_rate_field])
+
+    def get_current_editorial_data(self):
         """
         get_current_frame_range will execute the hook specified in the 'hook_frame_operation'
             setting for this app.
-        It will record the result of the hook and return the values as a tuple of (in, out).
+        It will record the result of the hook and return the values as a tuple of (in, out, frame_rate).
 
         If there is an internal exception thrown from the hook, it will reraise the exception as
             a tank.TankError and write the traceback to the log.
         If the data returned is not in the correct format, tuple with two keys, it will
             also throw a tank.TankError exception.
 
-        :returns: Tuple of (in, out) frame range values.
-        :rtype: tuple[int,int]
+        :returns: Tuple of (in, out, frame_rate) frame range values.
+        :rtype: tuple[int,int,float]
         :raises: tank.TankError
         """
         try:
-            result = self.execute_hook_method("hook_frame_operation", "get_frame_range")
+            result = self.execute_hook_method("hook_frame_operation", "get_editorial_data")
         except Exception as err:
             error_message = traceback.format_exc()
             self.logger.error(error_message)
             raise tank.TankError(
-                "Encountered an error while getting the frame range: {}".format(
+                "Encountered an error while getting the frame data: {}".format(
                     str(err)
                 )
             )
 
         if not isinstance(result, tuple) or (
-            isinstance(result, tuple) and len(result) != 2
+            isinstance(result, tuple) and len(result) != 3
         ):
             raise tank.TankError(
                 "Unexpected type returned from 'hook_frame_operation' for operation get_"
-                "frame_range - expected a 'tuple' with (in_frame, out_frame) values but "
+                "frame_range - expected a 'tuple' with (in_frame, out_frame, frame_rate) values but "
                 "returned '%s' : %s" % (type(result).__name__),
                 result,
             )
         return result
 
-    def set_frame_range(self, in_frame, out_frame):
+    def set_editorial_data(self, in_frame, out_frame, frame_rate):
         """
         set_current_frame_range will execute the hook specified in the 'hook_frame_operation'
             setting for this app.
-        It will pass the 'in_frame' and 'out_frame' to the hook.
+        It will pass the 'in_frame', 'out_frame', and 'frame_rate' to the hook.
 
         If there is an internal exception thrown from the hook, it will reraise the exception as
             a tank.TankError and write the traceback to the log.
 
         :param int in_frame: The value of in_frame that we want to set in the current session.
         :param int out_frame: The value of out_frame that we want to set in the current session.
+        :param float frame_rate: The value of frame_rate that we want to set in the current session.
         :raises: tank.TankError
         """
         try:
             self.execute_hook_method(
                 "hook_frame_operation",
-                "set_frame_range",
+                "set_editorial_data",
                 in_frame=in_frame,
                 out_frame=out_frame,
+                frame_rate=frame_rate,
             )
         except Exception as err:
             error_message = traceback.format_exc()
             self.logger.error(error_message)
             raise tank.TankError(
-                "Encountered an error while setting the frame range: {}".format(
+                "Encountered an error while setting the frame data: {}".format(
+                    str(err)
+                )
+            )
+
+    def check_current_file(self, *args):
+
+        shotgun_edit_data = self.get_editorial_data_from_shotgun()
+        current_edit_data = self.get_current_editorial_data()
+
+        if shotgun_edit_data != current_edit_data:
+
+            (new_in, new_out, new_rate) = shotgun_edit_data
+            (current_in, current_out, current_rate) = current_edit_data
+
+            message = "Your scene has does not match \n"
+            message += "latest frame ranges and frame rates\n"
+            message += "from shotgun.\n\n"
+            message += "Current start frame: %s\n" % current_in
+            message += "New start frame: %s\n\n" % new_in
+            message += "Current end frame: %s\n" % current_out
+            message += "New end frame: %s\n" % new_out
+            if new_rate:
+                message += "\nCurrent frame rate: %s\n" % current_rate
+                message += "New frame rate: %s\n\n" % new_rate
+            message += "Would you like to update your scene with\n"
+            message += "the latest editorial data?"
+
+            flags = QtGui.QMessageBox.Yes
+            flags |= QtGui.QMessageBox.No
+            response = QtGui.QMessageBox.question(None, "Question",
+                                                  message,
+                                                  flags)
+            if response == QtGui.QMessageBox.Yes:
+                self.set_editorial_data(new_in, new_out, new_rate)
+
+    def set_open_file_callback(self, func=None):
+        """
+        set_open_file_callback will execute the hook specified in the 'hook_frame_operation'
+            setting for this app.
+        It will set a callback on file open if the dcc supports it.
+
+        If there is an internal exception thrown from the hook, it will reraise the exception as
+            a tank.TankError and write the traceback to the log.
+        If the data returned is not in the correct format, tuple with two keys, it will
+            also throw a tank.TankError exception.
+
+        :param func func: The function to set as the callback.
+        :returns: whatever the callback function returns in case we need to unset the callback.
+        :rtype: depends on the DCC
+        :raises: tank.TankError
+        """
+        try:
+            callback = self.execute_hook_method("hook_callbacks", "set_open_file_callback", func=func)
+        except Exception as err:
+            error_message = traceback.format_exc()
+            self.logger.error(error_message)
+            raise tank.TankError(
+                "Encountered an error while setting open file callback: {}".format(
+                    str(err)
+                )
+            )
+
+        return callback
+
+    def unset_open_file_callback(self, func, callback):
+        """
+        unset_open_file_callback will execute the hook specified in the 'hook_frame_operation'
+            setting for this app.
+        It will unset a callback on file open if the dcc supports it.
+
+        If there is an internal exception thrown from the hook, it will reraise the exception as
+            a tank.TankError and write the traceback to the log.
+        If the data returned is not in the correct format, tuple with two keys, it will
+            also throw a tank.TankError exception.
+
+        :param func func: The function to unset as the callback.
+        :param callback: whatever the set_open_file_callback returned should be set here in
+            case the DCC needs it to unset the callback.
+        :raises: tank.TankError
+        """
+        try:
+            self.execute_hook_method("hook_callbacks", "unset_open_file_callback", func=func)
+        except Exception as err:
+            error_message = traceback.format_exc()
+            self.logger.error(error_message)
+            raise tank.TankError(
+                "Encountered an error while setting open file callback: {}".format(
                     str(err)
                 )
             )

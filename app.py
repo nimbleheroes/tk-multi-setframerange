@@ -47,7 +47,7 @@ class SetEditData(Application):
         self.engine.register_command(self.get_setting("menu_name"), self.run_app)
 
         # Set a callback here to run on file open if the DCC supports it.
-        self.open_file_callback = self.set_open_file_callback(self.check_current_file)
+        self.open_file_callback = self.set_open_file_callback(self.update_callback)
 
     @property
     def context_change_allowed(self):
@@ -63,7 +63,7 @@ class SetEditData(Application):
         self.logger.debug("Destroying sg_set_editorial_data")
 
         # Unset the open_file_callback.
-        self.unset_open_file_callback(self.check_current_file, self.open_file_callback)
+        self.unset_open_file_callback(self.update_callback, self.call)
 
     def run_app(self):
         """
@@ -77,36 +77,15 @@ class SetEditData(Application):
 
         """
         try:
-            (new_in, new_out, new_rate) = self.get_editorial_data_from_shotgun()
-            (current_in, current_out, current_rate) = self.get_current_editorial_data()
+            update_data = self._check_current_file()
 
-            if new_in is None or new_out is None:
-                message = "Shotgun has not yet been populated with \n"
-                message += "in and out frame data for this Shot."
-                QtGui.QMessageBox.information(None, "No data in Shotgun!", message)
-                return
-
-            # now update the frame range.
-            # because the frame range is often set in multiple places (e.g render range,
-            # current range, anim range etc), we go ahead an update every time, even if the values
-            # in Shotgun are the same as the values reported via get_current_frame_range()
-            self.set_editorial_data(new_in, new_out, new_rate)
-            message = "Your scene has been updated with the \n"
-            message += "latest frame ranges and frame rates\n"
-            message += "from shotgun.\n\n"
-            message += "Previous start frame: %s\n" % current_in
-            message += "New start frame: %s\n\n" % new_in
-            message += "Previous end frame: %s\n" % current_out
-            message += "New end frame: %s\n\n" % new_out
-            if new_rate:
-                message += "Previous frame rate: %s\n" % current_rate
-                message += "New frame rate: %s\n\n" % new_rate
+            if update_data:
+                self._update_dialog(*update_data)
             else:
-                message += "No setting was found to update\n"
-                message += "your frame rate so it was not changed.\n"
-                message += "Current frame rate: %s\n" % current_rate
-
-            QtGui.QMessageBox.information(None, "Frame data updated!", message)
+                message = "Your workfile is up to date with the \n"
+                message += "latest editorial data in Shotgun."
+                QtGui.QMessageBox.information(None, "You're all good!", message)
+                return
 
         except tank.TankError:
             message = "There was a problem updating your scene frame data.\n"
@@ -236,36 +215,34 @@ class SetEditData(Application):
                 )
             )
 
-    def check_current_file(self, *args):
+    def _check_current_file(self):
 
         shotgun_edit_data = self.get_editorial_data_from_shotgun()
         current_edit_data = self.get_current_editorial_data()
 
+        # something might need updating, lets get into it
         if shotgun_edit_data != current_edit_data:
+
+            update_range = True
+            update_rate = True
 
             (new_in, new_out, new_rate) = shotgun_edit_data
             (current_in, current_out, current_rate) = current_edit_data
 
-            message = "Your scene has does not match \n"
-            message += "latest frame ranges and frame rates\n"
-            message += "from shotgun.\n\n"
-            message += "Current start frame: %s\n" % current_in
-            message += "New start frame: %s\n\n" % new_in
-            message += "Current end frame: %s\n" % current_out
-            message += "New end frame: %s\n" % new_out
-            if new_rate:
-                message += "\nCurrent frame rate: %s\n" % current_rate
-                message += "New frame rate: %s\n\n" % new_rate
-            message += "Would you like to update your scene with\n"
-            message += "the latest editorial data?"
+            # If the current range matches the new range or
+            # either value in the new range is not set, we can skip
+            if (new_in, new_out) == (current_in, current_out) or new_in is None or new_out is None:
+                update_range = False
 
-            flags = QtGui.QMessageBox.Yes
-            flags |= QtGui.QMessageBox.No
-            response = QtGui.QMessageBox.question(None, "Question",
-                                                  message,
-                                                  flags)
-            if response == QtGui.QMessageBox.Yes:
-                self.set_editorial_data(new_in, new_out, new_rate)
+            # If the current_rate matches the new_rate or
+            # the new_rate is not set, we dont need to set it
+            if (new_rate == current_rate) or new_rate is None:
+                update_rate = False
+
+            if update_range or update_rate:
+                return shotgun_edit_data, current_edit_data, update_range, update_rate
+            else:
+                return False
 
     def set_open_file_callback(self, func=None):
         """
@@ -322,3 +299,42 @@ class SetEditData(Application):
                     str(err)
                 )
             )
+
+    def _update_dialog(self, shotgun_edit_data, current_edit_data, update_range=True, update_rate=True):
+
+        (new_in, new_out, new_rate) = shotgun_edit_data
+        (current_in, current_out, current_rate) = current_edit_data
+
+        if update_range or update_rate:
+
+            message = "Your workfile has does not match \n"
+            message += "the latest editorial data in Shotgun.\n\n"
+            if update_range:
+                message += "Current start frame: %s\n" % current_in
+                message += "New start frame: %s\n\n" % new_in
+                message += "Current end frame: %s\n" % current_out
+                message += "New end frame: %s\n\n" % new_out
+            if update_rate:
+                message += "Current frame rate: %s\n" % current_rate
+                message += "New frame rate: %s\n\n" % new_rate
+            message += "Would you like to update your workfile with\n"
+            message += "the latest editorial data?"
+
+            flags = QtGui.QMessageBox.Yes
+            flags |= QtGui.QMessageBox.No
+            response = QtGui.QMessageBox.question(None, "Question",
+                                                  message,
+                                                  flags)
+            if response == QtGui.QMessageBox.Yes:
+                self.set_editorial_data(new_in, new_out, new_rate)
+
+    def update_callback(self):
+        try:
+            update_data = self._check_current_file()
+
+            if update_data:
+                self._update_dialog(*update_data)
+
+        except tank.TankError:
+            error_message = traceback.format_exc()
+            self.logger.error(error_message)

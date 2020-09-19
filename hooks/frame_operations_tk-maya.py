@@ -66,16 +66,17 @@ class FrameOperation(HookBaseClass):
             cmds.currentUnit(t="{}fps".format(maya_frame_rate))
 
         # set frame data for plackback
-        cmds.playbackOptions(
-            minTime=in_frame,
-            maxTime=out_frame,
-            animationStartTime=in_frame,
-            animationEndTime=out_frame,
-        )
+        if in_frame and out_frame:
+            cmds.playbackOptions(
+                minTime=in_frame,
+                maxTime=out_frame,
+                animationStartTime=in_frame,
+                animationEndTime=out_frame,
+            )
 
-        # set frame ranges for rendering
-        cmds.setAttr("defaultRenderGlobals.startFrame", in_frame)
-        cmds.setAttr("defaultRenderGlobals.endFrame", out_frame)
+            # set frame ranges for rendering
+            cmds.setAttr("defaultRenderGlobals.startFrame", in_frame)
+            cmds.setAttr("defaultRenderGlobals.endFrame", out_frame)
 
     def closest_match(self, lst, val):
         return lst[min(range(len(lst)), key=lambda i: abs(lst[i] - val))]
